@@ -1,0 +1,102 @@
+//@version=6
+indicator("US30 V7.8.2 SWING FEED — SECURE HTF ZONES + YM", overlay=true, dynamic_requests=true, max_labels_count=50)
+
+// Dedicated long-horizon feed for US30 Signal Lab V7 Swing.
+// Run on the exact US30/Dow instrument you trade, on a 1-minute chart.
+// Create ONE alert: US30 V7 SWING FEED -> Any alert() function call.
+// Send to your V7 Railway webhook, NOT your V6 webhook.
+
+sendFeed = input.bool(true, "Send V7 snapshot each confirmed 1m bar")
+showPanel = input.bool(true, "Show V7 status panel")
+ymSymbol = input.symbol("CBOT_MINI:YM1!", "YM confirmation")
+webhookSecret = input.string("", "Webhook Secret", confirm=true)
+
+f_num(float x) => na(x) ? "null" : str.tostring(x, format.mintick)
+f_num2(float x) => na(x) ? "null" : str.tostring(x, "#.####")
+
+f_snapshot() =>
+    float e20 = ta.ema(close,20)
+    float e50 = ta.ema(close,50)
+    float e200 = ta.ema(close,200)
+    float rsi = ta.rsi(close,14)
+    float atr = ta.atr(14)
+    float atrma = ta.sma(atr,20)
+    [dip, dim, adx] = ta.dmi(14,14)
+    float sh20 = ta.highest(high[1],20)
+    float sl20 = ta.lowest(low[1],20)
+    float sh50 = ta.highest(high[1],50)
+    float sl50 = ta.lowest(low[1],50)
+    float vma = ta.sma(volume,20)
+    float basis = ta.sma(close,20)
+    float dev = ta.stdev(close,20)
+    float bbw = basis != 0 ? (4.0*dev)/basis : na
+    float bbwma = ta.sma(bbw,20)
+    [open[1],high[1],low[1],close[1],e20[1],e50[1],e200[1],rsi[1],atr[1],atrma[1],adx[1],sh20[1],sl20[1],sh50[1],sl50[1],close[4],e20[4],volume[1],vma[1],bbw[1],bbwma[1]]
+
+f_current() =>
+    float e20 = ta.ema(close,20)
+    float e50 = ta.ema(close,50)
+    float e200 = ta.ema(close,200)
+    float rsi = ta.rsi(close,14)
+    float atr = ta.atr(14)
+    float atrma = ta.sma(atr,20)
+    [dip, dim, adx] = ta.dmi(14,14)
+    float sh20 = ta.highest(high[1],20)
+    float sl20 = ta.lowest(low[1],20)
+    float sh50 = ta.highest(high[1],50)
+    float sl50 = ta.lowest(low[1],50)
+    float vma = ta.sma(volume,20)
+    float basis = ta.sma(close,20)
+    float dev = ta.stdev(close,20)
+    float bbw = basis != 0 ? (4.0*dev)/basis : na
+    float bbwma = ta.sma(bbw,20)
+    [open,high,low,close,e20,e50,e200,rsi,atr,atrma,adx,sh20,sl20,sh50,sl50,close[3],e20[3],volume,vma,bbw,bbwma]
+
+f_json(string tf,float o,float h,float l,float c,float e20,float e50,float e200,float rsi,float atr,float atrma,float adx,float sh20,float sl20,float sh50,float sl50,float c3,float e20prev,float vol,float vma,float bbw,float bbwma) =>
+    '{"tf":"'+tf+'","o":'+f_num(o)+',"h":'+f_num(h)+',"l":'+f_num(l)+',"c":'+f_num(c)+',"ema20":'+f_num(e20)+',"ema50":'+f_num(e50)+',"ema200":'+f_num(e200)+',"rsi":'+f_num2(rsi)+',"atr":'+f_num(atr)+',"atr_ma":'+f_num(atrma)+',"adx":'+f_num2(adx)+',"swing_hi":'+f_num(sh20)+',"swing_lo":'+f_num(sl20)+',"swing_hi50":'+f_num(sh50)+',"swing_lo50":'+f_num(sl50)+',"c3":'+f_num(c3)+',"ema20_prev":'+f_num(e20prev)+',"vol":'+f_num(vol)+',"vma20":'+f_num(vma)+',"bb_width":'+f_num2(bbw)+',"bb_width_ma":'+f_num2(bbwma)+'}'
+
+// Current 1m is for live trade supervision only. Higher timeframes are confirmed previous bars.
+[o1,h1,l1,c1,e201,e501,e2001,r1,a1,am1,adx1,sh1,sl1,sh501,sl501,c31,e20p1,vol1,vm1,bw1,bwm1] = f_current()
+[o60,h60,l60,c60,e2060,e5060,e20060,r60,a60,am60,adx60,sh60,sl60,sh5060,sl5060,c360,e20p60,vol60,vm60,bw60,bwm60] = request.security(syminfo.tickerid,"60",f_snapshot(),lookahead=barmerge.lookahead_on)
+[o240,h240,l240,c240,e20240,e50240,e200240,r240,a240,am240,adx240,sh240,sl240,sh50240,sl50240,c3240,e20p240,vol240,vm240,bw240,bwm240] = request.security(syminfo.tickerid,"240",f_snapshot(),lookahead=barmerge.lookahead_on)
+[oD,hD,lD,cD,e20D,e50D,e200D,rD,aD,amD,adxD,shD,slD,sh50D,sl50D,c3D,e20pD,volD,vmD,bwD,bwmD] = request.security(syminfo.tickerid,"D",f_snapshot(),lookahead=barmerge.lookahead_on)
+[oW,hW,lW,cW,e20W,e50W,e200W,rW,aW,amW,adxW,shW,slW,sh50W,sl50W,c3W,e20pW,volW,vmW,bwW,bwmW] = request.security(syminfo.tickerid,"W",f_snapshot(),lookahead=barmerge.lookahead_on)
+[oM,hM,lM,cM,e20M,e50M,e200M,rM,aM,amM,adxM,shM,slM,sh50M,sl50M,c3M,e20pM,volM,vmM,bwM,bwmM] = request.security(syminfo.tickerid,"M",f_snapshot(),lookahead=barmerge.lookahead_on)
+
+[prevDH,prevDL,prevDC] = request.security(syminfo.tickerid,"D",[high[1],low[1],close[1]],lookahead=barmerge.lookahead_on)
+[prevWH,prevWL,prevWC] = request.security(syminfo.tickerid,"W",[high[1],low[1],close[1]],lookahead=barmerge.lookahead_on)
+[prevMH,prevML,prevMC] = request.security(syminfo.tickerid,"M",[high[1],low[1],close[1]],lookahead=barmerge.lookahead_on)
+// Historical old-ATH reference from prior 5000 confirmed daily bars (~20 trading years).
+oldATH = request.security(syminfo.tickerid,"D",ta.highest(high[1],5000),lookahead=barmerge.lookahead_on)
+
+j1=f_json("1m",o1,h1,l1,c1,e201,e501,e2001,r1,a1,am1,adx1,sh1,sl1,sh501,sl501,c31,e20p1,vol1,vm1,bw1,bwm1)
+j60=f_json("1h",o60,h60,l60,c60,e2060,e5060,e20060,r60,a60,am60,adx60,sh60,sl60,sh5060,sl5060,c360,e20p60,vol60,vm60,bw60,bwm60)
+j240=f_json("4h",o240,h240,l240,c240,e20240,e50240,e200240,r240,a240,am240,adx240,sh240,sl240,sh50240,sl50240,c3240,e20p240,vol240,vm240,bw240,bwm240)
+jD=f_json("1D",oD,hD,lD,cD,e20D,e50D,e200D,rD,aD,amD,adxD,shD,slD,sh50D,sl50D,c3D,e20pD,volD,vmD,bwD,bwmD)
+jW=f_json("1W",oW,hW,lW,cW,e20W,e50W,e200W,rW,aW,amW,adxW,shW,slW,sh50W,sl50W,c3W,e20pW,volW,vmW,bwW,bwmW)
+jM=f_json("1M",oM,hM,lM,cM,e20M,e50M,e200M,rM,aM,amM,adxM,shM,slM,sh50M,sl50M,c3M,e20pM,volM,vmM,bwM,bwmM)
+
+// V7.1 compatibility mode:
+// Only YM is requested from TradingView. SPX/NDX/VIX/DXY/US10Y requests were removed
+// so TradingView will not reject the alert for missing market-data subscriptions.
+// Macro/news/intermarket enrichment can be supplied by the V7 backend using free sources.
+f_ret() => 100.0*(close[1]/close[2]-1.0)
+ymRet=request.security(ymSymbol,"D",f_ret(),lookahead=barmerge.lookahead_on,ignore_invalid_symbol=true)
+
+inter='{"ym_ret":'+f_num2(ymRet)+'}'
+refs='{"prev_day_high":'+f_num(prevDH)+',"prev_day_low":'+f_num(prevDL)+',"prev_day_close":'+f_num(prevDC)+',"prev_week_high":'+f_num(prevWH)+',"prev_week_low":'+f_num(prevWL)+',"prev_week_close":'+f_num(prevWC)+',"prev_month_high":'+f_num(prevMH)+',"prev_month_low":'+f_num(prevML)+',"prev_month_close":'+f_num(prevMC)+',"old_ath":'+f_num(oldATH)+'}'
+payload='{"version":7.82,"secret":"'+webhookSecret+'","symbol":"'+syminfo.tickerid+'","exchange":"'+syminfo.prefix+'","ts":'+str.tostring(time_close)+',"frames":['+j1+','+j60+','+j240+','+jD+','+jW+','+jM+'],"reference_levels":'+refs+',"intermarket":'+inter+'}' 
+
+is1m=timeframe.isminutes and timeframe.multiplier==1
+if sendFeed and is1m and barstate.isconfirmed
+    alert(payload,alert.freq_once_per_bar_close)
+
+plot(e201,"EMA 20",color=color.new(color.aqua,0))
+plot(e501,"EMA 50",color=color.new(color.orange,0))
+plot(e2001,"EMA 200",color=color.new(color.gray,20))
+var table t=table.new(position.top_right,1,4,border_width=1)
+if showPanel and barstate.islast
+    table.cell(t,0,0,"US30 V7.8.2 SWING",text_color=color.white,bgcolor=color.rgb(10,25,45))
+    table.cell(t,0,1,is1m?"Feed: confirmed 1m":"Switch chart to 1 minute",text_color=is1m?color.lime:color.orange)
+    table.cell(t,0,2,"HTF: 1H · 4H · D · W · M",text_color=color.silver)
+    table.cell(t,0,3,"HTF zones · YM + Databento backend",text_color=color.silver)

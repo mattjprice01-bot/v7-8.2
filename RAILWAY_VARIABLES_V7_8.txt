@@ -1,0 +1,24 @@
+REQUIRED FOR DATABENTO
+DATABENTO_API_KEY=YOUR_PRIVATE_KEY
+DATABENTO_DATASET=GLBX.MDP3
+DATABENTO_SYMBOL=YM.v.0
+DATABENTO_SCHEMA=mbp-10
+DATABENTO_TICK_SIZE=1
+
+RECOMMENDED PERSISTENT VOLUME MOUNT: /data
+US30_V7_DB=/data/v7_swing.db
+US30_LAST_MACRO_FILE=/data/last_macro.json
+
+OPTIONAL PHONE PUSH
+NTFY_TOPIC=your-private-topic
+# OR
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+
+
+V7.8.1: No additional Railway variables are required for the HTF Swing Zone Engine.
+
+
+V7.8.2 SECURE WEBHOOK
+WEBHOOK_SECRET=<generate a new long random secret>
+The same value must be pasted into the Pine indicator's Webhook Secret setting.
