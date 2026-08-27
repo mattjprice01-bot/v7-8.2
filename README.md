@@ -1,70 +1,57 @@
-# US30 SIGNAL LAB V7.9 — IN-PLACE PATCH
+# US30 SIGNAL LAB V7.9.1 — LEARNING INTEGRITY + STATE GATE
 
-This patch upgrades the current working V7.8.2 Railway deployment to V7.9 without rebuilding the project or re-entering variables.
+This is an in-place patch for the existing V7.9 Railway deployment.
 
-## Replace these two files in the existing GitHub repo
-
+## Replace these files
 1. `server.py`
 2. `README.md`
 
-Commit both files to the SAME branch Railway already deploys from.
+Do not change the existing Railway variables.
 
-## Railway variables
+## Direction display
+V7.9.1 calculates direction internally but does not display LONG or SHORT while merely watching or while a setup is forming.
 
-Do **not** delete, recreate, or change the working variables.
+Public states:
+- `WATCHING · NO TRADE`
+- `SETUP FORMING · NO TRADE YET`
+- `ENTRY READY · LONG` or `ENTRY READY · SHORT`
+- `ACTIVE TRADE · LONG/SHORT`
 
-Keep the existing configuration, including:
-- `ALPHAVANTAGE_API_KEY`
-- `DATABASE_PATH` / existing database path variable
-- `DATABENTO_API_KEY`
-- `DATABENTO_DATASET`
-- `DATABENTO_SCHEMA`
-- `DATABENTO_SYMBOL`
-- `FRED_API_KEY`
-- `NTFY_TOPIC`
-- Any existing Railway-provided variables
+The manual **I'M IN THIS TRADE** button is hidden until `ENTRY_READY`.
 
-## V7.9 additions
+## Learning integrity
+The old V7.9 evaluator is no longer used for live calibration or performance.
 
-- Persistent pre-trade state engine
-- `WATCHING -> SETUP_FORMING -> ENTRY_READY -> ACTIVE_TRADE`
-- Hysteresis to stop small probability fluctuations causing repeated state changes
-- Setup invalidation back to `WATCHING`
-- Meaningful state-change phone notifications
-- Databento/YM order-flow rejection alerts when L2 materially flips against a developing setup
-- Existing active-trade monitoring remains intact
-- Existing Databento, Alpha Vantage, FRED, NTFY, learning, HTF zones and database configuration remain intact
+V7.9.1 starts a clean table and:
+- creates a prediction only on a NEW `ENTRY_READY` transition;
+- limits clean samples to one per direction per 60 minutes;
+- resolves LONG/SHORT target and stop directionally;
+- excludes a 1-minute bar when both target and stop are touched because OHLC cannot reveal which happened first;
+- scores timeout outcomes directionally but gives them 0R in barrier equity;
+- freezes adaptive weight changes while the clean evaluator is being validated;
+- withholds statistical calibration until there are at least 30 clean resolved samples and 12 samples in the relevant 5-point qualification bucket;
+- ignores old V7.9 learning rows in the V7.9.1 performance screen.
 
-## Deployment
+## Trade Map
+Execution targets are separated from structural swing objectives:
+- Execution TP1: 1.5R–2.0R
+- Execution TP2: 2.5R–3.0R
+- previous distant TP zones remain visible as structural swing objectives (context only).
 
-1. Upload/replace `server.py`.
-2. Upload/replace `README.md`.
-3. Commit the two changes.
-4. Allow Railway to redeploy automatically.
-5. Wait for Railway to show **Active**.
-6. Open the dashboard and confirm:
-   - V7.9 branding
-   - TradingView feed LIVE
-   - Databento LIVE
-   - Alpha Vantage LIVE
-   - Phone alerts CONNECTED · NTFY
-7. Check `/health`; it should identify:
-   `US30 Signal Lab V7.9 Intelligent State Engine`
+Existing execution stop and structural invalidation remain separate.
 
-## Important behaviour
+## Existing integrations preserved
+TradingView, Databento YM L2, FRED/macro, Alpha Vantage News & Sentiment, NTFY, SQLite path, Railway service/domain.
 
-V7.9 does **not** assume that an entry-ready model signal means a trade has actually been taken.
+## Deploy
+Replace `server.py` and `README.md` in the same repo and commit. Railway should redeploy automatically.
 
-`ACTIVE_TRADE` begins only after using the dashboard's **I'M IN THIS TRADE — START TRACKING** action.
+After deployment verify:
+1. V7.9.1 branding.
+2. WATCHING shows NO TRADE, not LONG/SHORT.
+3. Databento stays LIVE.
+4. NTFY stays connected.
+5. Learning Stats restart from the clean V7.9.1 table.
+6. Execution TP ranges show about 1.5–3R and old distant targets are labelled context only.
 
-## Rollback
-
-If anything unexpected happens:
-1. Restore the previous V7.8.2 `server.py`.
-2. Commit and redeploy.
-
-The V7.9 `signal_state` database table can remain in SQLite; it will not interfere with the previous version.
-
-## Scope
-
-This is decision-support software. It does not automatically execute trades.
+Decision support only; no automatic order execution.
