@@ -80,6 +80,9 @@ def db():
         c.execute("ALTER TABLE signal_state ADD COLUMN direction_streak INTEGER DEFAULT 0")
     if "entry_route" not in signal_cols:
         c.execute("ALTER TABLE signal_state ADD COLUMN entry_route TEXT DEFAULT 'NONE'")
+    pred_cols={row['name'] for row in c.execute('PRAGMA table_info(predictions_v791)')}
+    if 'integrity_version' not in pred_cols:
+        c.execute('ALTER TABLE predictions_v791 ADD COLUMN integrity_version INTEGER NOT NULL DEFAULT 0')
     ensure_learning_tables(c)
     c.commit(); return c
 
@@ -144,10 +147,17 @@ def pretrade_alerts(c, r: dict) -> None:
     return
 
 
-def _v791_evaluate_predictions(c, ts_ms: int, high: float, low: float, close: float) -> None:
+def _v791_evaluate_predictions(c, ts_ms: int, high: float, low: float, close: float, symbol=None) -> None:
     rows=c.execute("SELECT * FROM predictions_v791 WHERE status='OPEN' ORDER BY id").fetchall()
     for row in rows:
-        p=dict(row); side=str(p["side"]); sign=1 if side=="LONG" else -1
+        p=dict(row)
+        if ts_ms <= int(p['created_ts']) or (symbol is not None and p['symbol'] != symbol):
+            continue
+        deadline = int(p['created_ts']) + int(p['horizon_minutes']) * 60000
+        if ts_ms > deadline + 60000:
+            c.execute("UPDATE predictions_v791 SET status='RESOLVED',outcome='DATA_GAP',ambiguous=1,resolved_at=?,resolved_ts=? WHERE id=?", (now(),ts_ms,p['id']))
+            continue
+        side=str(p["side"]); sign=1 if side=="LONG" else -1
         target=float(p["target_price"]); stop=float(p["stop_price"])
         target_hit=(high>=target) if sign>0 else (low<=target)
         stop_hit=(low<=stop) if sign>0 else (high>=stop)
@@ -190,15 +200,17 @@ def _v791_maybe_record_prediction(c, r: dict, state_result: dict, sess: dict, db
     zone_name=zone.get("type") or zone.get("label") or ""
     flow=float((dbento or {}).get("score",r.get("databento_score",0)) or 0)
     c.execute("""INSERT INTO predictions_v791(created_at,created_ts,symbol,side,entry,target_points,stop_points,
-                 horizon_minutes,probability,target_price,stop_price,state_at_entry,zone_type,session_name,databento_score)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 horizon_minutes,probability,target_price,stop_price,state_at_entry,zone_type,session_name,databento_score,integrity_version)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,2)""",
               (now(),ts_ms,str(r.get("symbol","US30")),side,entry,target_points,stop_points,horizon,probability,
                entry+sign*target_points,entry-sign*stop_points,"ENTRY_READY",str(zone_name),
                str((sess or {}).get("name") or ""),flow))
 
 def _v791_performance(c) -> dict:
     rows=[dict(x) for x in c.execute("SELECT * FROM predictions_v791 ORDER BY id").fetchall()]
-    resolved=[x for x in rows if x["status"]=="RESOLVED" and not int(x.get("ambiguous") or 0)]
+    legacy_total=sum(int(x.get('integrity_version') or 0) < 2 for x in rows)
+    rows=[x for x in rows if int(x.get('integrity_version') or 0) >= 2]
+    resolved=[x for x in rows if x['status']=='RESOLVED' and not int(x.get('ambiguous') or 0)]
     barriers=[x for x in resolved if x.get("outcome") in ("TARGET","STOP")]
     directional=[x for x in resolved if x.get("favorable") is not None]
     barrier_win=round(100*sum(x["outcome"]=="TARGET" for x in barriers)/len(barriers),1) if barriers else None
@@ -208,11 +220,11 @@ def _v791_performance(c) -> dict:
         if x.get("outcome") in ("TARGET","STOP"):
             cumulative+=float(x.get("r_result") or 0)
         curve.append({"id":x["id"],"r":round(cumulative,3)})
-    brier=round(sum((float(x["probability"])/100-int(x["favorable"]))**2 for x in directional)/len(directional),4) if directional else None
-    return {"definition":"V7.9.1 clean ENTRY_READY samples; same-bar target+stop excluded.",
+    brier=round(sum((float(x["probability"])/100-int(x["favorable"]))**2 for x in barriers)/len(barriers),4) if barriers else None
+    return {"definition":"Validated v2 ENTRY_READY samples; legacy, same-bar ambiguity and data gaps excluded. Brier uses target-before-stop outcomes.", "legacy_predictions_preserved":legacy_total,
             "total_predictions":len(rows),"resolved":len(resolved),"barrier_samples":len(barriers),
             "barrier_win_rate":barrier_win,"directional_accuracy":accuracy,"cumulative_r":round(cumulative,2),
-            "primary_brier":brier,"challenger_brier":0.25 if directional else None,
+            "primary_brier":brier,"challenger_brier":0.25 if barriers else None,
             "ambiguous_excluded":sum(int(x.get("ambiguous") or 0) for x in rows),"zones":[],"curve":curve[-200:]}
 
 
@@ -245,7 +257,7 @@ def _v791_calibration(c, raw_probability: float):
     clean = [dict(x) for x in c.execute(
         """SELECT probability,favorable,ambiguous,status
            FROM predictions_v791
-           WHERE status='RESOLVED' AND ambiguous=0 AND favorable IS NOT NULL"""
+           WHERE status='RESOLVED' AND ambiguous=0 AND integrity_version>=2 AND outcome IN ('TARGET','STOP') AND favorable IS NOT NULL"""
     ).fetchall()]
 
     total_n = len(clean)
@@ -385,6 +397,10 @@ def update_signal_state(c, r: dict) -> dict:
 
     public_direction=direction if new in ("ENTRY_READY","ACTIVE_TRADE") else "NONE"
     out={"state":new,"direction":direction,"public_direction":public_direction,"changed":changed,"probability":prob,"previous_state":old_state,"orderflow":flow,"direction_streak":streak,"entry_route":route,"contradiction":contradiction}
+    r['qualification_checks']={
+        'conservative': {'direction':bool(sign),'no_contradiction':not contradiction,'score_threshold':prob>=perfect,'big_move':big>=65,'bias':bias>=1.20,'timing':timing,'entry_zone':_inside_entry(r),'context':context_ok,'orderflow':bool(r.get('databento_confirmed'))},
+        'momentum': {'direction':bool(sign),'persistence':streak>=8,'timing':timing,'big_move':big>=72,'bias':bias>=1.45,'technicals':bool(sign and sign*tech>=1.0),'intermarket':inter_support,'context':context_ok,'orderflow':bool(sign and (bool(r.get('databento_confirmed')) or sign*flow>=0.18))}}
+    r['rejection_reasons']={route:[key for key,ok in checks.items() if not ok] for route,checks in r['qualification_checks'].items()}
     r["trade_state"]=new; r["state_engine"]=out; r["public_direction"]=public_direction; r["entry_route"]=route; r["direction_streak"]=streak
     return out
 
@@ -517,6 +533,13 @@ async def ingest(request, secret=None):
     if SECRET and not secrets.compare_digest(supplied, SECRET):
         raise HTTPException(403,"bad webhook secret")
     ts_ms=int(p.get("ts") or int(datetime.now(timezone.utc).timestamp()*1000))
+    symbol=str(p.get('symbol') or 'US30')
+    with db() as c:
+        previous=c.execute('SELECT raw_json,result_json FROM snapshots WHERE symbol=? ORDER BY id DESC LIMIT 1',(symbol,)).fetchone()
+        if previous:
+            previous_ts=int(json.loads(previous['raw_json']).get('ts') or 0)
+            if ts_ms <= previous_ts:
+                return {'ok':True,'ignored':'duplicate_or_out_of_order','result':json.loads(previous['result_json'])}
     macro=get_macro(); news=get_news(); market=get_market(); dbento=get_databento_snapshot(); sess=session_context(ts_ms)
     inter=dict(p.get("intermarket") or {}); inter.update((market or {}).get("values") or {}); p["intermarket"]=inter; p["databento"]=dbento
     r=aggregate(p,macro,news)
@@ -525,10 +548,10 @@ async def ingest(request, secret=None):
     r["reasons"]=(list(r.get("reasons") or []) + list(zone_ctx.get("reasons") or []))[:18]
     r["market_context"]=market; r["databento"]=dbento; r["session"]=sess
     r["context_status"]={"macro":macro.get("status","UNKNOWN"),"news":news.get("status","UNKNOWN"),"market":market.get("status","UNKNOWN"),"databento":dbento.get("status","UNKNOWN")}
-    bar=frame(p,"1m") or frame(p,"1h") or {}
+    bar=frame(p,"1m") or {}
     with db() as c:
         if bar:
-            _v791_evaluate_predictions(c,ts_ms,float(bar.get("h",r["price"])),float(bar.get("l",r["price"])),float(bar.get("c",r["price"])))
+            _v791_evaluate_predictions(c,ts_ms,float(bar.get("h",r["price"])),float(bar.get("l",r["price"])),float(bar.get("c",r["price"])),r["symbol"])
         raw_prob=_qualification_probability(r)
         cal_prob,cal_n,cal_bucket=_v791_calibration(c,raw_prob)
         r["probability_raw"]=round(raw_prob,1)
@@ -646,6 +669,22 @@ def databento_status():
 def learning_perf():
     with db() as c:
         return {"ok":True, **_v791_performance(c)}
+
+@app.get('/api/learning/audit')
+def learning_audit():
+    """Bounded, read-only learning evidence; never expose raw webhook/secrets."""
+    with db() as c:
+        tables={x[0] for x in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        snapshots=dict(c.execute('SELECT COUNT(*) AS total,MIN(received_at) AS first_received,MAX(received_at) AS last_received FROM snapshots').fetchone())
+        predictions=[dict(x) for x in c.execute('SELECT id,created_ts,symbol,side,entry,probability,outcome,r_result,integrity_version FROM predictions_v791 ORDER BY id DESC LIMIT 200')]
+        shadow={}
+        for table in ('shadow_candidates','shadow_candidates_v2'):
+            if table in tables:
+                shadow[table]={'total':c.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0],
+                    'groups':[dict(x) for x in c.execute(f'SELECT live_state,direction,outcome,COUNT(*) AS n,AVG(probability) AS mean_score,AVG(result_r) AS mean_r FROM {table} GROUP BY live_state,direction,outcome')],
+                    'recent':[dict(x) for x in c.execute(f'SELECT id,source_snapshot_id,created_ts_ms,live_state,direction,probability,rejection_reason,outcome,result_r FROM {table} ORDER BY id DESC LIMIT 100')]}
+        progress=c.execute('SELECT last_snapshot_id FROM shadow_progress_v2 WHERE id=1').fetchone()[0] if 'shadow_progress_v2' in tables else None
+    return {'ok':True,'snapshots':snapshots,'predictions_recent':predictions,'shadow':shadow,'shadow_v2_last_snapshot_id':progress,'limitations':'Historical samples may contain timestamp/entry-bar bias; scores are not validated win probabilities.'}
 
 @app.get("/api/settings")
 def settings_get():
