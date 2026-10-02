@@ -165,6 +165,8 @@ def _process_snapshot(c, row):
     high, low, close = _num(f1, 'high', 'h'), _num(f1, 'low', 'l'), _num(f1, 'close', 'c')
     if high is None or low is None or close is None:
         return  # Never evaluate entry outcomes against an overlapping hourly candle.
+    if previous and ts_ms - int(previous['last_ts']) > 90000:
+        c.execute("UPDATE shadow_candidates_v2 SET status='RESOLVED',outcome='DATA_GAP',resolved_at=?,result_r=NULL,direction_correct=NULL WHERE status='OPEN' AND symbol=?", (datetime.now(timezone.utc).isoformat(),symbol))
     _resolve_open(c, ts_ms, high, low, close, symbol)
     _record_candidate(c, int(row['id']), ts_ms, result)
     c.execute('INSERT INTO shadow_market_progress_v2 VALUES(?,?) ON CONFLICT(symbol) DO UPDATE SET last_ts=excluded.last_ts',(symbol,ts_ms))
