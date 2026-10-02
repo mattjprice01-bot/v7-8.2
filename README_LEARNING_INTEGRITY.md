@@ -37,3 +37,31 @@ Deployment requires explicit confirmation. Once deployed, retrieve audit
 results, wait for replay checkpoint to catch up with snapshots, compare
 legacy versus rebuilt shadow groups, and assess accepted/rejected setups
 before any evidence-based entry-threshold tuning.
+
+## Deployment and forensic follow-up
+
+PR #2 was merged/deployed on 2 October at 10:50 UTC. Post-deploy audit
+reported an empty DB. The initial infrastructure audit incorrectly asserted
+volume persistence; subsequent resource inspection confirmed no volumes had
+been attached. The prior 120.5 MB ephemeral DB could not be recovered through
+available tools. This is a material loss of the Sept 28–Oct 2 collection.
+
+Volume 9759cc9d-c05a-4c47-a4e6-99c44e0fe509 is now actually mounted at
+/app/data, verified in service configuration, with deployment b4336d15
+successful. TradingView and Databento were both LIVE at 10:58 UTC.
+
+A separate backup uploaded on Sept 26 was found: its actual data covers
+Aug 27–Sep 22, with 24,773 snapshots, 6 duplicate/out-of-order deliveries,
+and 49 intervals over 90 seconds. A strictly chronological offline replay
+produced 1,683 overlapping shadow observations. In the 90–99.9 score bucket,
+7 targets and 91 stops were observed, excluding timeouts/gaps/open samples.
+This is historical, overlapping evidence, not independent out-of-sample
+validation of the currently deployed momentum model. It supports treating
+model scores separately from calibrated win probabilities, not automatic
+threshold lowering. Current gate replay over archived inputs found shorts
+frequently blocked by score, higher-timeframe bias and order-flow conditions.
+
+Follow-up patch excludes outcomes after any observed feed gap over 90s,
+even inside a horizon, and clarifies score labels without changing numeric
+entry thresholds. 25 tests pass. A fresh collection is required for the
+requested five-day analysis; do not describe the earlier backup as that week.

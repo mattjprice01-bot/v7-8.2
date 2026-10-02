@@ -107,3 +107,23 @@ def test_record_new_prediction_has_integrity_version():
             assert c.execute('SELECT integrity_version FROM predictions_v791').fetchone()[0]==2
         finally:
             server.DB=old
+
+
+def test_shadow_excludes_gap_inside_horizon():
+    c=connection(); sl._process_snapshot(c,snapshot(1,1_000_000))
+    sl._process_snapshot(c,snapshot(2,1_180_000,210,95,200))
+    row=c.execute('SELECT outcome,result_r FROM shadow_candidates_v2 WHERE id=1').fetchone()
+    assert tuple(row)==('DATA_GAP',None)
+
+
+def test_prediction_excludes_gap_inside_horizon():
+    old=server.DB
+    with tempfile.TemporaryDirectory() as td:
+        server.DB=Path(td)/'test.db'
+        try:
+            c=server.db()
+            server._v791_maybe_record_prediction(c,{'symbol':'US30','price':100,'probability_raw':98},{'state':'ENTRY_READY','changed':True,'direction':'LONG'},{},{},1000000)
+            server._v791_evaluate_predictions(c,1_180_000,210,95,200,'US30',1_000_000)
+            assert tuple(c.execute('SELECT outcome,ambiguous FROM predictions_v791').fetchone())==('DATA_GAP',1)
+        finally:
+            server.DB=old
